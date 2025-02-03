@@ -9,8 +9,7 @@ const resultsDiv = document.getElementById("results");
 
 let selectedFile = null;
 
-// Helper to display JSON results nicely
-function displayResults(title, data) {
+function display(title, data) {
   resultsDiv.innerHTML = `<h2>${title}:</h2><pre>${JSON.stringify(
     data,
     null,
@@ -20,20 +19,18 @@ function displayResults(title, data) {
 
 // 1. Load XML Files
 loadFilesBtn.addEventListener("click", async () => {
-  const response = await fetch("/load_files", { method: "POST" });
-  const data = await response.json();
-  displayResults("Available XML Files", data.files || []);
+  const resp = await fetch("/load_files", { method: "POST" });
+  const data = await resp.json();
+  display("Available XML Files", data.files || []);
 });
 
-// 2. Preprocess Files
+// 2. Preprocess
 preprocessBtn.addEventListener("click", async () => {
   const loadResp = await fetch("/load_files", { method: "POST" });
   const loadData = await loadResp.json();
   const files = loadData.files || [];
   if (!files.length) {
-    displayResults("Preprocess Error", {
-      message: "No XML files found in 'data'.",
-    });
+    display("Error", { message: "No files in data folder" });
     return;
   }
 
@@ -43,17 +40,17 @@ preprocessBtn.addEventListener("click", async () => {
     body: JSON.stringify({ files }),
   });
   const preprocessData = await preprocessResp.json();
-  displayResults("Preprocessing Results", preprocessData);
+  display("Preprocessing Results", preprocessData);
 });
 
 // 3. Train Model
 trainModelBtn.addEventListener("click", async () => {
   const resp = await fetch("/train_model", { method: "POST" });
   const data = await resp.json();
-  displayResults("Training Results", data);
+  display("Training Results", data);
 });
 
-// 4. Browse & Upload Single XML File
+// 4. Upload Single File
 browseFileBtn.addEventListener("click", () => {
   uploadFileInput.click();
 });
@@ -71,18 +68,19 @@ uploadFileInput.addEventListener("change", async (e) => {
     const uploadData = await uploadResp.json();
 
     if (uploadResp.ok) {
-      selectedFile = uploadData.file;
+      selectedFile = uploadData.file; // e.g. "myproblem.xml"
       selectedFileName.textContent = `Selected File: ${file.name}`;
       predictBtn.disabled = false;
     } else {
-      alert(uploadData.message || "Upload failed.");
+      alert(uploadData.message || "Upload failed");
     }
   }
 });
 
-// 5. Predict (Single File)
+// 5. Predict
 predictBtn.addEventListener("click", async () => {
   if (!selectedFile) return;
+
   const resp = await fetch("/predict", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -91,17 +89,14 @@ predictBtn.addEventListener("click", async () => {
   const data = await resp.json();
 
   if (resp.ok) {
-    // Show predicted Book, Chapter, Section
-    const html = `
+    // Show Book, Chapter, Section
+    resultsDiv.innerHTML = `
       <h2>Prediction Results:</h2>
-      <div>
-        <strong>File:</strong> ${data.file} <br />
-        <strong>Book ID:</strong> ${data.book_id} <br />
-        <strong>Chapter ID:</strong> ${data.chapter_id} <br />
-        <strong>Section ID:</strong> ${data.section_id}
-      </div>
+      <div><strong>File:</strong> ${data.file}</div>
+      <div><strong>Book ID:</strong> ${data.book_id}</div>
+      <div><strong>Chapter ID:</strong> ${data.chapter_id}</div>
+      <div><strong>Section ID:</strong> ${data.section_id}</div>
     `;
-    resultsDiv.innerHTML = html;
   } else {
     resultsDiv.innerHTML = `
       <h2>Prediction Error</h2>

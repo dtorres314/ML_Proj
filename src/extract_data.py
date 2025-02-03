@@ -1,5 +1,4 @@
 import xml.etree.ElementTree as ET
-import os
 
 def extract_relevant_info(file_path):
     """
@@ -19,10 +18,8 @@ def extract_relevant_info(file_path):
         text_chunks = []
 
         def traverse(node):
-            # If node has text, strip it and add if not empty
             if node.text and node.text.strip():
                 text_chunks.append(node.text.strip())
-
             for child in node:
                 traverse(child)
 

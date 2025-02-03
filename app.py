@@ -22,72 +22,71 @@ def index():
 @app.route("/load_files", methods=["POST"])
 def load_files():
     """
-    Load and list all XML files from the data directory.
+    Load and list all .xml files in the data directory.
     """
     files = []
     for root, _, filenames in os.walk(DATA_DIR):
         for filename in filenames:
             if filename.endswith(".xml"):
                 rel_path = os.path.relpath(os.path.join(root, filename), DATA_DIR)
-                files.append(rel_path)
-
+                files.append(rel_path.replace("\\", "/"))
     if not files:
-        return jsonify({"files": [], "message": "No XML files found in the data directory."})
-
+        return jsonify({"files": [], "message": "No XML files found."})
     return jsonify({"files": files})
 
 
 @app.route("/preprocess", methods=["POST"])
 def preprocess():
     """
-    Preprocess (extract text) from each XML file and save it to a .txt file in
-    outputs/<book_id>/<chapter_id>/<section_id> directory.
+    Preprocess (extract text) from XML files and save to:
+      outputs/<book_id>/<chapter_id>/<section_id>/<problem>.txt
     """
     try:
         if not request.is_json:
-            return jsonify({"message": "Invalid request format. Expected JSON."}), 415
+            return jsonify({"message": "Expected JSON payload"}), 415
 
-        files = request.json.get("files", [])
+        payload = request.json
+        files = payload.get("files", [])
         if not files:
-            return jsonify({"results": [], "message": "No files selected for processing."}), 400
+            return jsonify({"results": [], "message": "No files selected"}), 400
 
         results = []
         for rel_path in files:
-            # Convert backslashes to forward slashes (Windows compatibility)
+            # Normalize path
             norm_path = rel_path.replace("\\", "/")
             input_path = os.path.join(DATA_DIR, norm_path)
 
-            # Split the path by "/"
+            # Extract last 4 parts [book, chapter, section, problem.xml]
             path_parts = norm_path.split("/")
-
-            # We want the last 4 parts: [book_id, chapter_id, section_id, problemName.xml]
             if len(path_parts) < 4:
                 results.append({
-                    "file": rel_path,
-                    "status": "Error: Directory structure not recognized (needs at least 4 parts)."
+                    "file": norm_path,
+                    "status": "Error: Not enough path segments (need >=4)."
                 })
                 continue
 
-            # Extract the last four parts
-            book_id, chapter_id, section_id, xml_file = path_parts[-4:]
-            problem_name = os.path.splitext(xml_file)[0]
+            book_id, chapter_id, section_id, problem_file = path_parts[-4:]
+            problem_name, _ = os.path.splitext(problem_file)
 
-            # Output path: outputs/<book_id>/<chapter_id>/<section_id>/<problem>.txt
-            out_dir = os.path.join(OUTPUT_DIR, book_id, chapter_id, section_id)
-            output_file = os.path.join(out_dir, f"{problem_name}.txt")
+            output_dir = os.path.join(OUTPUT_DIR, book_id, chapter_id, section_id)
+            output_file = os.path.join(output_dir, f"{problem_name}.txt")
+
+            if not os.path.exists(input_path):
+                results.append({"file": rel_path, "status": "Error: File not found"})
+                continue
 
             try:
-                if not os.path.exists(input_path):
-                    results.append({"file": rel_path, "status": "Error: File not found"})
-                    continue
-
                 text_content = extract_relevant_info(input_path)
                 os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
                 with open(output_file, "w", encoding="utf-8") as f:
                     f.write(text_content)
 
-                results.append({"file": rel_path, "status": "Processed", "output": output_file})
+                results.append({
+                    "file": rel_path,
+                    "status": "Processed",
+                    "output": output_file
+                })
             except Exception as e:
                 error_message = traceback.format_exc()
                 results.append({
@@ -100,17 +99,18 @@ def preprocess():
 
     except Exception as e:
         error_message = traceback.format_exc()
-        return jsonify({"message": f"An error occurred: {str(e)}", "details": error_message}), 500
+        return jsonify({"message": str(e), "details": error_message}), 500
 
 
 @app.route("/train_model", methods=["POST"])
 def train_model():
     """
-    Train a supervised learning model using the preprocessed text files.
+    Train a supervised learning model using the extracted .txt files
+    that are stored in outputs/<book_id>/<chapter_id>/<section_id> subfolders.
     """
     try:
-        training_results = train_model_pipeline(OUTPUT_DIR, MODEL_DIR)
-        return jsonify({"status": "success", "training_results": training_results})
+        result = train_model_pipeline(OUTPUT_DIR, MODEL_DIR)
+        return jsonify({"status": "success", "training_results": result})
     except Exception as e:
         error_message = traceback.format_exc()
         return jsonify({"status": "error", "message": str(e), "details": error_message}), 500
@@ -119,48 +119,53 @@ def train_model():
 @app.route("/upload_file", methods=["POST"])
 def upload_file():
     """
-    Upload a new XML file from the user.
+    Upload a single XML file from user. (Manually places it in data/<filename>)
     """
     if "file" not in request.files:
-        return jsonify({"message": "No file part in the request."}), 400
+        return jsonify({"message": "No file part in request"}), 400
 
     file = request.files["file"]
     if file.filename == "":
-        return jsonify({"message": "No selected file."}), 400
+        return jsonify({"message": "No selected file"}), 400
 
-    if file and file.filename.endswith(".xml"):
-        save_path = os.path.join(DATA_DIR, file.filename)
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        file.save(save_path)
-        return jsonify({"message": "File uploaded successfully.", "file": file.filename})
-    return jsonify({"message": "Only XML files are allowed."}), 400
+    if not file.filename.endswith(".xml"):
+        return jsonify({"message": "Only XML files allowed"}), 400
+
+    save_path = os.path.join(DATA_DIR, file.filename)
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    file.save(save_path)
+    return jsonify({"message": "File uploaded", "file": file.filename})
 
 
 @app.route("/predict", methods=["POST"])
 def predict():
     """
-    Predict the Book, Chapter, and Section ID for the given XML file.
+    Predict BookID, ChapterID, SectionID for single XML file using the trained model.
     """
     if not request.is_json:
-        return jsonify({"message": "Invalid request format. Expected JSON."}), 415
+        return jsonify({"message": "Expected JSON payload"}), 415
 
-    file = request.json.get("file", "")
+    req_data = request.json
+    file = req_data.get("file", "")
     if not file:
-        return jsonify({"message": "No file selected for prediction."}), 400
+        return jsonify({"message": "No file given"}), 400
 
-    input_path = os.path.join(DATA_DIR, file)
+    input_path = os.path.join(DATA_DIR, file.replace("\\", "/"))
     try:
-        prediction = predict_labels(input_path, MODEL_DIR)
-        # Return the separate fields
+        pred = predict_labels(input_path, MODEL_DIR)
         return jsonify({
             "file": file,
-            "book_id": prediction["book_id"],
-            "chapter_id": prediction["chapter_id"],
-            "section_id": prediction["section_id"]
+            "book_id": pred["book_id"],
+            "chapter_id": pred["chapter_id"],
+            "section_id": pred["section_id"]
         })
     except Exception as e:
         error_message = traceback.format_exc()
-        return jsonify({"file": file, "error": str(e), "details": error_message}), 500
+        return jsonify({
+            "file": file,
+            "error": str(e),
+            "details": error_message
+        }), 500
 
 
 if __name__ == "__main__":

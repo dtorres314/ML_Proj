@@ -8,53 +8,50 @@ from sklearn.metrics import classification_report
 
 def load_preprocessed_data(output_dir):
     """
-    Build a dataset from the text files in `output_dir`.
-    Each text file corresponds to a label with format 'bookID-chapterID-sectionID'.
+    Gathers all .txt files from outputs/<book_id>/<chapter_id>/<section_id>.
+    The label is 'bookID-chapterID-sectionID' derived from the folder structure.
     """
-    data = []
-    for root, _, filenames in os.walk(output_dir):
-        for filename in filenames:
-            if filename.endswith(".txt"):
-                # Label is derived from the folder structure: bookID-chapterID-sectionID
-                rel_path = os.path.relpath(os.path.join(root, filename), output_dir)
-                label_dirs = os.path.dirname(rel_path).split(os.sep)  # [bookID, chapterID, sectionID]
-                if len(label_dirs) == 3:
-                    label = "-".join(label_dirs)  # e.g. '1-24-185'
+    rows = []
+    for root, _, files in os.walk(output_dir):
+        for fname in files:
+            if fname.endswith(".txt"):
+                rel_path = os.path.relpath(os.path.join(root, fname), output_dir)
+                path_parts = rel_path.replace("\\", "/").split("/")
+                if len(path_parts) >= 4:
+                    # e.g. [book_id, chapter_id, section_id, problem.txt]
+                    book_id, chapter_id, section_id = path_parts[:3]
+                    label = f"{book_id}-{chapter_id}-{section_id}"
                 else:
-                    # If not exactly 3 levels, skip or handle differently
+                    # If structure isn't 4 deep, skip or handle differently
                     continue
 
-                file_path = os.path.join(root, filename)
-                with open(file_path, "r", encoding="utf-8") as f:
-                    content = f.read()
+                with open(os.path.join(root, fname), "r", encoding="utf-8") as f:
+                    text_content = f.read().strip()
 
-                data.append({"content": content, "label": label})
-
-    return pd.DataFrame(data)
+                rows.append({"content": text_content, "label": label})
+    return pd.DataFrame(rows)
 
 def train_model_pipeline(output_dir, model_dir):
     df = load_preprocessed_data(output_dir)
     if df.empty:
-        return {"error": "No training data found in outputs directory. Preprocess files first."}
+        return {"error": "No preprocessed text files found. Please run Preprocess first."}
 
-    vectorizer = TfidfVectorizer(max_features=1000)
+    vectorizer = TfidfVectorizer(max_features=500)
     X = vectorizer.fit_transform(df["content"]).toarray()
     y = df["label"]
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
     model = RandomForestClassifier(n_estimators=3, random_state=42)
     model.fit(X_train, y_train)
 
     y_pred = model.predict(X_test)
     report = classification_report(y_test, y_pred, output_dict=True)
 
-    # Save model and vectorizer
+    # Save
     os.makedirs(model_dir, exist_ok=True)
     joblib.dump(model, os.path.join(model_dir, "model.pkl"))
     joblib.dump(vectorizer, os.path.join(model_dir, "vectorizer.pkl"))
 
-    # Return a summary
     return {
         "accuracy": report["accuracy"],
         "classification_report": report
