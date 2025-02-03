@@ -53,23 +53,27 @@ def preprocess():
 
         results = []
         for rel_path in files:
-            input_path = os.path.join(DATA_DIR, rel_path)
-            # Split the directory structure into bookID-chapterID-sectionID
-            # e.g. "1/24/185/3821.xml"
-            path_parts = rel_path.split(os.sep)
-            # Path structure: [bookID, chapterID, sectionID, problemName.xml]
-            if len(path_parts) != 4:
+            # Convert backslashes to forward slashes (Windows compatibility)
+            norm_path = rel_path.replace("\\", "/")
+            input_path = os.path.join(DATA_DIR, norm_path)
+
+            # Split the path by "/"
+            path_parts = norm_path.split("/")
+
+            # We want the last 4 parts: [book_id, chapter_id, section_id, problemName.xml]
+            if len(path_parts) < 4:
                 results.append({
                     "file": rel_path,
-                    "status": "Error: Directory structure not recognized (expected 4 parts)."
+                    "status": "Error: Directory structure not recognized (needs at least 4 parts)."
                 })
                 continue
 
-            book_id, chapter_id, section_id, xml_file = path_parts
+            # Extract the last four parts
+            book_id, chapter_id, section_id, xml_file = path_parts[-4:]
+            problem_name = os.path.splitext(xml_file)[0]
 
             # Output path: outputs/<book_id>/<chapter_id>/<section_id>/<problem>.txt
             out_dir = os.path.join(OUTPUT_DIR, book_id, chapter_id, section_id)
-            problem_name = os.path.splitext(xml_file)[0]
             output_file = os.path.join(out_dir, f"{problem_name}.txt")
 
             try:
@@ -86,7 +90,11 @@ def preprocess():
                 results.append({"file": rel_path, "status": "Processed", "output": output_file})
             except Exception as e:
                 error_message = traceback.format_exc()
-                results.append({"file": rel_path, "status": f"Error: {str(e)}", "details": error_message})
+                results.append({
+                    "file": rel_path,
+                    "status": f"Error: {str(e)}",
+                    "details": error_message
+                })
 
         return jsonify({"results": results})
 

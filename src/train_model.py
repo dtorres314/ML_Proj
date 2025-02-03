@@ -37,13 +37,13 @@ def train_model_pipeline(output_dir, model_dir):
     if df.empty:
         return {"error": "No training data found in outputs directory. Preprocess files first."}
 
-    vectorizer = TfidfVectorizer(max_features=5000)
+    vectorizer = TfidfVectorizer(max_features=1000)
     X = vectorizer.fit_transform(df["content"]).toarray()
     y = df["label"]
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model = RandomForestClassifier(n_estimators=3, random_state=42)
     model.fit(X_train, y_train)
 
     y_pred = model.predict(X_test)
