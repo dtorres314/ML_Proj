@@ -2,17 +2,9 @@ import os
 import joblib
 from src.extract_data import extract_relevant_info
 
-
 def predict_labels(file_path, model_dir):
     """
-    Predict Section ID for a given XML file using the trained model.
-
-    Args:
-        file_path (str): Path to the XML file.
-        model_dir (str): Directory containing the trained model and vectorizer.
-
-    Returns:
-        dict: A dictionary containing the Problem ID, predicted Section ID, and related details.
+    Predict 'bookID-chapterID-sectionID' for a single XML file using the trained model.
     """
     model_path = os.path.join(model_dir, "model.pkl")
     vectorizer_path = os.path.join(model_dir, "vectorizer.pkl")
@@ -23,19 +15,23 @@ def predict_labels(file_path, model_dir):
     model = joblib.load(model_path)
     vectorizer = joblib.load(vectorizer_path)
 
-    # Extract information from the XML file
-    extracted_data = extract_relevant_info(file_path)
-    problem_id = extracted_data.get("ProblemID", "")
-    statement = extracted_data.get("Statement", "")
+    # Extract textual content from XML
+    extracted_text = extract_relevant_info(file_path)
+    if not extracted_text.strip():
+        raise ValueError("No meaningful text extracted from the XML file.")
 
-    # Vectorize the statement
-    input_vector = vectorizer.transform([statement]).toarray()
+    # Vectorize and predict
+    input_vec = vectorizer.transform([extracted_text]).toarray()
+    predicted_label = model.predict(input_vec)[0]  # 'bookID-chapterID-sectionID'
 
-    # Predict Section ID
-    predicted_section_id = model.predict(input_vector)[0]
+    parts = predicted_label.split("-")
+    if len(parts) == 3:
+        book_id, chapter_id, section_id = parts
+    else:
+        book_id, chapter_id, section_id = ("Unknown", "Unknown", "Unknown")
 
-    # Construct the prediction result
     return {
-        "ProblemID": problem_id,
-        "PredictedSectionID": predicted_section_id,
+        "book_id": book_id,
+        "chapter_id": chapter_id,
+        "section_id": section_id
     }
