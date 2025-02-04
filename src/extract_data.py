@@ -1,36 +1,34 @@
 import xml.etree.ElementTree as ET
 
-
 def extract_relevant_info(file_path):
     """
-    Extract relevant information from an XML file.
-
-    Args:
-        file_path (str): Path to the XML file.
-
-    Returns:
-        dict: A dictionary containing extracted information such as ProblemID, Title, and Statement.
+    Recursively extracts the text content from an XML file, removing tags.
+    Returns a plain string of meaningful text.
     """
     try:
         with open(file_path, "rb") as f:
             content = f.read()
 
-        # Parse the XML file
+        # Decode
         try:
             root = ET.fromstring(content.decode("utf-8"))
         except UnicodeDecodeError:
             root = ET.fromstring(content.decode("utf-16"))
 
-        # Extract relevant fields
-        problem_id = root.findtext("ProblemID", default="").strip()
-        title = root.findtext("Title", default="").strip()
-        statement = root.findtext("Statement", default="").strip()
+        text_list = []
 
-        return {
-            "ProblemID": problem_id,
-            "Title": title,
-            "Statement": statement,
-        }
+        def traverse(node):
+            # Capture node text if present
+            if node.text and node.text.strip():
+                text_list.append(node.text.strip())
+            # Recurse
+            for child in node:
+                traverse(child)
+            # Possibly capture node.tail if needed
+
+        traverse(root)
+
+        return "\n".join(text_list)
 
     except Exception as e:
-        raise RuntimeError(f"Failed to process file {file_path}: {str(e)}")
+        raise RuntimeError(f"Failed to process file '{file_path}': {str(e)}")

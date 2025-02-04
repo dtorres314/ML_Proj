@@ -6,38 +6,61 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 
-
 def load_preprocessed_data(output_dir):
-    data = []
+    """
+    Gather .txt from outputs folder. The label is derived from
+    the path format: outputs/<book_id>/<chapter_id>/<section_id>/<problem>.txt
+    => label = 'book_id-chapter_id-section_id'
+    """
+    rows = []
     for root, _, filenames in os.walk(output_dir):
         for filename in filenames:
-            if filename.endswith(".txt"):
-                label = os.path.basename(root)
+            if filename.lower().endswith(".txt"):
+                # Rebuild relative path
+                rel_path = os.path.relpath(os.path.join(root, filename), output_dir)
+                rel_path = rel_path.replace("\\", "/")
+
+                # e.g. '1/24/185/3821.txt'
+                parts = rel_path.split("/")
+                if len(parts) >= 4:
+                    # Expect at least [book_id, chapter_id, section_id, problem.txt]
+                    book_id, chapter_id, section_id = parts[:3]
+                    label = f"{book_id}-{chapter_id}-{section_id}"
+                else:
+                    continue
+
                 file_path = os.path.join(root, filename)
                 with open(file_path, "r", encoding="utf-8") as f:
-                    content = f.read()
-                data.append({"content": content, "label": label})
-    return pd.DataFrame(data)
+                    content = f.read().strip()
 
+                rows.append({
+                    "content": content,
+                    "label": label
+                })
+    return pd.DataFrame(rows)
 
 def train_model_pipeline(output_dir, model_dir):
     df = load_preprocessed_data(output_dir)
-
     if df.empty:
-        raise ValueError("No preprocessed data found for training.")
+        return {"error": "No .txt found in outputs. Please preprocess first."}
 
-    vectorizer = TfidfVectorizer(max_features=5000)
+    vectorizer = TfidfVectorizer(max_features=500)
     X = vectorizer.fit_transform(df["content"]).toarray()
     y = df["label"]
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
+    clf = RandomForestClassifier(n_estimators=5, random_state=42)
+    clf.fit(X_train, y_train)
 
-    y_pred = model.predict(X_test)
+    y_pred = clf.predict(X_test)
     report = classification_report(y_test, y_pred, output_dict=True)
 
-    joblib.dump(model, os.path.join(model_dir, "model.pkl"))
+    # Save
+    os.makedirs(model_dir, exist_ok=True)
+    joblib.dump(clf, os.path.join(model_dir, "model.pkl"))
     joblib.dump(vectorizer, os.path.join(model_dir, "vectorizer.pkl"))
 
-    return report
+    return {
+        "accuracy": report["accuracy"],
+        "classification_report": report
+    }
