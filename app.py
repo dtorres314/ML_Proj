@@ -1,19 +1,19 @@
+from flask import Flask, render_template, request, jsonify
 import os
 import traceback
-from flask import Flask, render_template, request, jsonify
 
+from src.db_manager import init_db, insert_problem_entry
 from src.extract_data import extract_relevant_info
-from src.train_model import train_model_pipeline
+from src.train_and_test import train_and_test_pipeline
 from src.predict_model import predict_labels
 
 app = Flask(__name__)
 
 DATA_DIR = "data"
-OUTPUT_DIR = "outputs"
 MODEL_DIR = "model"
 
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-os.makedirs(MODEL_DIR, exist_ok=True)
+# Initialize DB
+init_db()
 
 @app.route("/")
 def index():
@@ -22,159 +22,159 @@ def index():
 
 @app.route("/load_files", methods=["POST"])
 def load_files():
-    """
-    Load and list all .xml files from the data directory.
-    """
     files = []
     for root, _, filenames in os.walk(DATA_DIR):
         for filename in filenames:
             if filename.lower().endswith(".xml"):
-                # Normalize path (Windows backslash to forward slash)
                 rel_path = os.path.relpath(os.path.join(root, filename), DATA_DIR)
                 rel_path = rel_path.replace("\\", "/")
                 files.append(rel_path)
-
-    if not files:
-        return jsonify({"files": [], "message": "No XML files found in data directory."})
-
     return jsonify({"files": files})
 
 
-@app.route("/preprocess", methods=["POST"])
-def preprocess():
+@app.route("/extract_and_save_db", methods=["POST"])
+def extract_and_save_db():
     """
-    Preprocess each XML file by extracting text and saving it to outputs/<same structure>.txt
+    For each file path, parse out Book/Chapter/Section from the first 3 path segments,
+    then the 4th path segment is the "problem folder",
+    and the 5th is the .xml file (problemFile).
+    
+    Path example: "1/1/2/1288/1288.xml"
+    => bookId = '1', chapterId = '1', sectionId = '2'
+       problemFolder = '1288', problemFile = '1288.xml'
+       problemId = '1288'
     """
     try:
         if not request.is_json:
             return jsonify({"message": "Expected JSON body"}), 415
 
-        payload = request.json
-        files = payload.get("files", [])
+        data = request.json
+        files = data.get("files", [])
         if not files:
-            return jsonify({"results": [], "message": "No files selected."}), 400
+            return jsonify({"results": [], "message": "No files specified"}), 400
 
         results = []
         for rel_path in files:
-            # Ensure consistent path
+            # e.g. "1/1/2/1288/1288.xml"
             norm_path = rel_path.replace("\\", "/")
-            input_path = os.path.join(DATA_DIR, norm_path)
+            full_path = os.path.join(DATA_DIR, norm_path)
 
-            if not os.path.exists(input_path):
+            path_parts = norm_path.split("/")
+            if len(path_parts) != 5:
                 results.append({
-                    "file": norm_path,
+                    "file": rel_path,
+                    "status": "Error: path must have exactly 5 parts (book/chapter/section/problemFolder/problemFile.xml)."
+                })
+                continue
+
+            # Extract the fields
+            book_id = path_parts[0]       # '1'
+            chapter_id = path_parts[1]    # '1'
+            section_id = path_parts[2]    # '2'
+            problem_folder = path_parts[3]   # '1288'
+            problem_file = path_parts[4]     # '1288.xml'
+
+            # Problem ID from the file name
+            problem_id = os.path.splitext(problem_file)[0]  # '1288'
+
+            if not os.path.exists(full_path):
+                results.append({
+                    "file": rel_path,
                     "status": "Error: File not found"
                 })
                 continue
 
-            if not norm_path.lower().endswith(".xml"):
-                results.append({
-                    "file": norm_path,
-                    "status": "Error: Not an XML file"
-                })
-                continue
-
-            # Build the output path in outputs, with same structure
-            # e.g. outputs/<book_id>/<chapter_id>/<section_id>/<problem>.txt
-            output_full = os.path.join(OUTPUT_DIR, norm_path)
-            # Replace .xml with .txt
-            base_no_ext = os.path.splitext(output_full)[0]
-            output_txt = base_no_ext + ".txt"
-
             try:
-                text_content = extract_relevant_info(input_path)
-                os.makedirs(os.path.dirname(output_txt), exist_ok=True)
-
-                with open(output_txt, "w", encoding="utf-8") as f:
-                    f.write(text_content)
-
+                # Extract text content from .xml
+                text_content = extract_relevant_info(full_path)
+                insert_problem_entry(
+                    problem_id=problem_id,
+                    book_id=book_id,
+                    chapter_id=chapter_id,
+                    section_id=section_id,
+                    content=text_content
+                )
                 results.append({
-                    "file": norm_path,
-                    "status": "Processed",
-                    "output": output_txt
+                    "file": rel_path,
+                    "status": "Saved to DB",
+                    "bookId": book_id,
+                    "chapterId": chapter_id,
+                    "sectionId": section_id,
+                    "problemFolder": problem_folder,
+                    "problemId": problem_id
                 })
             except Exception as e:
-                error_message = traceback.format_exc()
+                err_message = traceback.format_exc()
                 results.append({
-                    "file": norm_path,
+                    "file": rel_path,
                     "status": f"Error: {str(e)}",
-                    "details": error_message
+                    "details": err_message
                 })
 
         return jsonify({"results": results})
 
     except Exception as e:
-        error_message = traceback.format_exc()
-        return jsonify({"message": str(e), "details": error_message}), 500
+        err = traceback.format_exc()
+        return jsonify({"message": str(e), "details": err}), 500
 
-
-@app.route("/train_model", methods=["POST"])
-def train_model():
+@app.route("/train_and_test", methods=["POST"])
+def train_and_test():
     """
-    Train the ML model on all .txt files under outputs/ folder.
+    Splits data 70/30, trains, logs test results in test_summary_table,
+    saves model to 'model/' folder.
+    Returns summary stats (accuracy, etc).
     """
     try:
-        result = train_model_pipeline(OUTPUT_DIR, MODEL_DIR)
-        return jsonify({"status": "success", "training_results": result})
+        summary = train_and_test_pipeline(MODEL_DIR)
+        return jsonify({"status": "success", "summary": summary})
     except Exception as e:
-        error_message = traceback.format_exc()
-        return jsonify({"status": "error", "message": str(e), "details": error_message}), 500
-
-
-@app.route("/upload_file", methods=["POST"])
-def upload_file():
-    """
-    Upload a single XML file into the data/ folder (top level).
-    """
-    if "file" not in request.files:
-        return jsonify({"message": "No file part in request."}), 400
-
-    file = request.files["file"]
-    if file.filename == "":
-        return jsonify({"message": "No selected file."}), 400
-
-    if not file.filename.lower().endswith(".xml"):
-        return jsonify({"message": "Only XML files allowed."}), 400
-
-    save_path = os.path.join(DATA_DIR, file.filename)
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    file.save(save_path)
-
-    return jsonify({"message": "File uploaded", "file": file.filename})
+        err = traceback.format_exc()
+        return jsonify({"status": "error", "message": str(e), "details": err}), 500
 
 
 @app.route("/predict", methods=["POST"])
 def predict():
     """
-    Predict the Book, Chapter, Section ID for a single XML file using the trained model.
+    Predict for a single .xml file using the trained model in 'model/' folder.
     """
     if not request.is_json:
         return jsonify({"message": "Expected JSON"}), 415
 
-    data = request.json
-    file_rel = data.get("file", "")
-    if not file_rel:
-        return jsonify({"message": "No file provided"}), 400
-
-    # Rebuild input path
+    info = request.json
+    file_rel = info.get("file", "")
     norm_path = file_rel.replace("\\", "/")
-    input_path = os.path.join(DATA_DIR, norm_path)
+    full_path = os.path.join(DATA_DIR, norm_path)
 
     try:
-        pred = predict_labels(input_path, MODEL_DIR)
+        preds = predict_labels(full_path, MODEL_DIR)
         return jsonify({
             "file": file_rel,
-            "book_id": pred["book_id"],
-            "chapter_id": pred["chapter_id"],
-            "section_id": pred["section_id"]
+            "book_id": preds["book_id"],
+            "chapter_id": preds["chapter_id"],
+            "section_id": preds["section_id"]
         })
     except Exception as e:
-        err_trace = traceback.format_exc()
-        return jsonify({
-            "file": file_rel,
-            "error": str(e),
-            "details": err_trace
-        }), 500
+        err = traceback.format_exc()
+        return jsonify({"file": file_rel, "error": str(e), "details": err}), 500
+
+
+@app.route("/upload_file", methods=["POST"])
+def upload_file():
+    if "file" not in request.files:
+        return jsonify({"message": "No file in request"}), 400
+
+    f = request.files["file"]
+    if f.filename == "":
+        return jsonify({"message": "No selected file."}), 400
+
+    if not f.filename.lower().endswith(".xml"):
+        return jsonify({"message": "Only XML files allowed"}), 400
+
+    save_path = os.path.join(DATA_DIR, f.filename)
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    f.save(save_path)
+
+    return jsonify({"message": "File uploaded", "file": f.filename})
 
 
 if __name__ == "__main__":
