@@ -4,33 +4,36 @@ from src.extract_data import extract_relevant_info
 
 def predict_labels(file_path, model_dir):
     """
-    Predict 'book_id-chapter_id-section_id' for a new XML file.
-    Returns a dict with separate fields for book_id, chapter_id, and section_id.
+    Predict book-chapter-section for a single XML using the model in model_dir
     """
-    model_path = os.path.join(model_dir, "model.pkl")
-    vec_path = os.path.join(model_dir, "vectorizer.pkl")
+    model_file = os.path.join(model_dir, "model.pkl")
+    vec_file = os.path.join(model_dir, "vectorizer.pkl")
 
-    if not os.path.exists(model_path) or not os.path.exists(vec_path):
+    if not os.path.exists(model_file) or not os.path.exists(vec_file):
         raise FileNotFoundError("Model or vectorizer not found. Please train first.")
 
-    model = joblib.load(model_path)
-    vectorizer = joblib.load(vec_path)
+    clf = joblib.load(model_file)
+    vectorizer = joblib.load(vec_file)
 
-    text_content = extract_relevant_info(file_path)
-    if not text_content.strip():
-        raise ValueError("No meaningful text extracted from XML.")
+    # Extract text
+    content = extract_relevant_info(file_path)
+    if not content.strip():
+        raise ValueError("No meaningful text in XML file.")
 
-    X_vec = vectorizer.transform([text_content]).toarray()
-    label = model.predict(X_vec)[0]  # e.g. '1-24-185'
+    # Vectorize
+    X_vec = vectorizer.transform([content]).toarray()
+    pred = clf.predict(X_vec)[0]  # '1-24-185'
 
-    parts = label.split("-")
+    parts = pred.split("-")
     if len(parts) == 3:
-        book_id, chapter_id, section_id = parts
+        return {
+            "book_id": parts[0],
+            "chapter_id": parts[1],
+            "section_id": parts[2]
+        }
     else:
-        book_id = chapter_id = section_id = "Unknown"
-
-    return {
-        "book_id": book_id,
-        "chapter_id": chapter_id,
-        "section_id": section_id
-    }
+        return {
+            "book_id": "Unknown",
+            "chapter_id": "Unknown",
+            "section_id": "Unknown"
+        }

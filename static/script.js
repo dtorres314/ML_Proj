@@ -1,6 +1,6 @@
 const loadFilesBtn = document.getElementById("loadFilesBtn");
-const preprocessBtn = document.getElementById("preprocessBtn");
-const trainModelBtn = document.getElementById("trainModelBtn");
+const extractDBBtn = document.getElementById("extractDBBtn");
+const trainTestBtn = document.getElementById("trainTestBtn");
 const browseFileBtn = document.getElementById("browseFileBtn");
 const uploadFileInput = document.getElementById("uploadFileInput");
 const predictBtn = document.getElementById("predictBtn");
@@ -10,7 +10,7 @@ const resultsDiv = document.getElementById("results");
 let selectedFile = null;
 
 function display(title, data) {
-  resultsDiv.innerHTML = `<h2>${title}:</h2><pre>${JSON.stringify(
+  resultsDiv.innerHTML = `<h2>${title}</h2><pre>${JSON.stringify(
     data,
     null,
     2
@@ -24,36 +24,36 @@ loadFilesBtn.addEventListener("click", async () => {
   display("Available XML Files", data.files || []);
 });
 
-// 2) Preprocess
-preprocessBtn.addEventListener("click", async () => {
-  // First load the file list
+// 2) Extract & Save to DB
+extractDBBtn.addEventListener("click", async () => {
+  // 2.1) Get list from load_files
   const loadResp = await fetch("/load_files", { method: "POST" });
   const loadData = await loadResp.json();
   const files = loadData.files || [];
 
   if (!files.length) {
-    display("Error", { message: "No files found in data/." });
+    display("Error", { message: "No .xml found in data." });
     return;
   }
 
-  // Call /preprocess
-  const preprocessResp = await fetch("/preprocess", {
+  // 2.2) Send to /extract_and_save_db
+  const resp = await fetch("/extract_and_save_db", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ files }),
   });
-  const preprocessData = await preprocessResp.json();
-  display("Preprocessing Results", preprocessData);
+  const resultData = await resp.json();
+  display("Extract & Save to DB Results", resultData);
 });
 
-// 3) Train
-trainModelBtn.addEventListener("click", async () => {
-  const resp = await fetch("/train_model", { method: "POST" });
+// 3) Train & Test
+trainTestBtn.addEventListener("click", async () => {
+  const resp = await fetch("/train_and_test", { method: "POST" });
   const data = await resp.json();
-  display("Training Results", data);
+  display("Train & Test Summary", data);
 });
 
-// 4) Browse & Upload Single File
+// 4) Browse Single File
 browseFileBtn.addEventListener("click", () => {
   uploadFileInput.click();
 });
@@ -64,18 +64,17 @@ uploadFileInput.addEventListener("change", async (e) => {
     const formData = new FormData();
     formData.append("file", file);
 
-    const uploadResp = await fetch("/upload_file", {
+    const upResp = await fetch("/upload_file", {
       method: "POST",
       body: formData,
     });
-    const uploadData = await uploadResp.json();
-
-    if (uploadResp.ok) {
-      selectedFile = uploadData.file; // e.g. "myProblem.xml"
+    const upData = await upResp.json();
+    if (upResp.ok) {
       selectedFileName.textContent = `Selected File: ${file.name}`;
       predictBtn.disabled = false;
+      selectedFile = upData.file;
     } else {
-      alert(uploadData.message || "Upload failed");
+      alert(upData.message || "Upload failed");
     }
   }
 });
@@ -83,7 +82,6 @@ uploadFileInput.addEventListener("change", async (e) => {
 // 5) Predict
 predictBtn.addEventListener("click", async () => {
   if (!selectedFile) return;
-
   const resp = await fetch("/predict", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -93,7 +91,7 @@ predictBtn.addEventListener("click", async () => {
 
   if (resp.ok) {
     resultsDiv.innerHTML = `
-      <h2>Prediction Results:</h2>
+      <h2>Prediction Results</h2>
       <p><strong>File:</strong> ${data.file}</p>
       <p><strong>Book ID:</strong> ${data.book_id}</p>
       <p><strong>Chapter ID:</strong> ${data.chapter_id}</p>
