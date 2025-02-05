@@ -1,8 +1,12 @@
-import random, os
+import os
 import joblib
+import random
+import numpy as np
+
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
+
 from src.db_manager import (
     fetch_training_data_for_book,
     clear_test_summary,
@@ -11,41 +15,49 @@ from src.db_manager import (
 
 def train_and_test_pipeline(model_dir):
     """
-    1) Only fetch data from Book 1
-    2) Shuffle, 70/30 split
-    3) Train model, test -> log results
-    4) Save model & vectorizer to model_dir
-    5) Return summary stats
+    1) Fetch data for Book 1 from the DB (train_test_data_table).
+    2) Use sklearn's train_test_split with test_size=0.3 => 70% train, 30% test.
+    3) Train RandomForest on the training set, then predict on the test set.
+    4) For each tested example, log results in test_summary_table (actual vs. predicted).
+    5) Return summary stats for matched chapter and matched section, and save model to model_dir.
     """
-    # *** Only load Book 1's data ***
+    # 1) Load data for Book 1 only
     data_rows = fetch_training_data_for_book("1")
     if not data_rows:
         return {"error": "No data found for Book 1 in DB."}
 
-    random.shuffle(data_rows)
+    # 2) Prepare data
+    X_raw = [row["content"] for row in data_rows]
+    y_raw = [f"{row['bookId']}-{row['chapterId']}-{row['sectionId']}" for row in data_rows]
 
-    X = [d["content"] for d in data_rows]
-    y = [f"{d['bookId']}-{d['chapterId']}-{d['sectionId']}" for d in data_rows]
-    prob_ids = [d["problemId"] for d in data_rows]
-    act_books = [d["bookId"] for d in data_rows]
-    act_chaps = [d["chapterId"] for d in data_rows]
-    act_secs = [d["sectionId"] for d in data_rows]
+    problem_ids = [row["problemId"] for row in data_rows]
+    books = [row["bookId"] for row in data_rows]
+    chapters = [row["chapterId"] for row in data_rows]
+    sections = [row["sectionId"] for row in data_rows]
 
-    vec = TfidfVectorizer(max_features=5000)
-    X_mat = vec.fit_transform(X).toarray()
+    # Vectorize text
+    vectorizer = TfidfVectorizer(max_features=5000)
+    X_matrix = vectorizer.fit_transform(X_raw).toarray()
 
-    train_size = int(len(X_mat)*0.7)
-    X_train, y_train = X_mat[:train_size], y[:train_size]
-    X_test, y_test = X_mat[train_size:], y[train_size:]
+    # 3) Use train_test_split with test_size=0.3 => 70% for training, 30% for testing
+    (X_train, X_test,
+     y_train, y_test,
+     pid_train, pid_test,
+     book_train, book_test,
+     chap_train, chap_test,
+     sec_train, sec_test) = train_test_split(
+         X_matrix, y_raw,
+         problem_ids, books, chapters, sections,
+         test_size=0.3,
+         random_state=42,
+         shuffle=True
+    )
 
-    test_prob_ids = prob_ids[train_size:]
-    test_books = act_books[train_size:]
-    test_chaps = act_chaps[train_size:]
-    test_secs = act_secs[train_size:]
+    # If no test data
+    if len(X_test) == 0:
+        return {"error": "Not enough data to form a test set. Possibly only one problem in DB."}
 
-    if not X_test:
-        return {"error": "Not enough data to create a test split. Need >1 problem for train & test."}
-
+    # 4) Train a RandomForest
     clf = RandomForestClassifier(n_estimators=100, random_state=42)
     clf.fit(X_train, y_train)
 
@@ -56,32 +68,34 @@ def train_and_test_pipeline(model_dir):
     correct_section = 0
     correct_chapter = 0
 
-    for i, xv in enumerate(X_test):
-        pred_label = clf.predict([xv])[0]  # e.g. '1-2-185'
-        p_parts = pred_label.split("-")
-        if len(p_parts) == 3:
-            pb, pc, ps = p_parts
+    # 5) Predict each test sample
+    for i, xvec in enumerate(X_test):
+        pred_label = clf.predict([xvec])[0]  # e.g. "1-24-185"
+        parts = pred_label.split("-")
+        if len(parts) == 3:
+            pb, pc, ps = parts
         else:
             pb, pc, ps = ("Unknown", "Unknown", "Unknown")
 
-        ab = test_books[i]
-        ac = test_chaps[i]
-        as_ = test_secs[i]
-        pid = test_prob_ids[i]
+        actual_book = book_test[i]
+        actual_chap = chap_test[i]
+        actual_sec = sec_test[i]
+        prob_id = pid_test[i]
 
-        match_section = 1 if (pb==ab and pc==ac and ps==as_) else 0
-        match_chapter = 1 if (pb==ab and pc==ac) else 0
+        match_section = 1 if (pb == actual_book and pc == actual_chap and ps == actual_sec) else 0
+        match_chapter = 1 if (pb == actual_book and pc == actual_chap) else 0
 
         if match_section:
             correct_section += 1
         if match_chapter:
             correct_chapter += 1
 
+        # Log in test_summary_table
         insert_test_summary(
-            problem_id=pid,
-            actual_b=ab,
-            actual_c=ac,
-            actual_s=as_,
+            problem_id=prob_id,
+            actual_b=actual_book,
+            actual_c=actual_chap,
+            actual_s=actual_sec,
             pred_b=pb,
             pred_c=pc,
             pred_s=ps,
@@ -89,8 +103,10 @@ def train_and_test_pipeline(model_dir):
             matched_chapter=match_chapter
         )
 
+    # Summaries
     section_acc = round(correct_section / total, 3)
     chapter_acc = round(correct_chapter / total, 3)
+
     summary = {
         "test_size": total,
         "section_correct": correct_section,
@@ -99,9 +115,9 @@ def train_and_test_pipeline(model_dir):
         "chapter_accuracy": chapter_acc
     }
 
-    # Save model & vectorizer
+    # 6) Save trained model & vectorizer
     os.makedirs(model_dir, exist_ok=True)
     joblib.dump(clf, os.path.join(model_dir, "model.pkl"))
-    joblib.dump(vec, os.path.join(model_dir, "vectorizer.pkl"))
+    joblib.dump(vectorizer, os.path.join(model_dir, "vectorizer.pkl"))
 
     return summary

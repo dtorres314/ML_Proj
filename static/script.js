@@ -82,6 +82,7 @@ uploadFileInput.addEventListener("change", async (e) => {
 // 5) Predict
 predictBtn.addEventListener("click", async () => {
   if (!selectedFile) return;
+
   const resp = await fetch("/predict", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -90,14 +91,19 @@ predictBtn.addEventListener("click", async () => {
   const data = await resp.json();
 
   if (resp.ok) {
+    // Show IDs & names
     resultsDiv.innerHTML = `
       <h2>Prediction Results</h2>
       <p><strong>File:</strong> ${data.file}</p>
       <p><strong>Book ID:</strong> ${data.book_id}</p>
+      <p><strong>Book Name:</strong> ${data.book_name}</p>
       <p><strong>Chapter ID:</strong> ${data.chapter_id}</p>
+      <p><strong>Chapter Name:</strong> ${data.chapter_name}</p>
       <p><strong>Section ID:</strong> ${data.section_id}</p>
+      <p><strong>Section Name:</strong> ${data.section_name}</p>
     `;
   } else {
+    // Show errors
     resultsDiv.innerHTML = `
       <h2>Prediction Error</h2>
       <pre>${JSON.stringify(data, null, 2)}</pre>
