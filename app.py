@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, jsonify
 import os
 import traceback
+import csv
 
 from src.db_manager import init_db, insert_problem_entry
 from src.extract_data import extract_relevant_info
@@ -12,8 +13,41 @@ app = Flask(__name__)
 DATA_DIR = "data"
 MODEL_DIR = "model"
 
+
+# Store a global lookup_map (bookID, chapterID, sectionID) -> (bookName, chapterName, sectionName)
+lookup_map = {}
+
+
 # Initialize DB
 init_db()
+
+def load_contentbackup_csv():
+    csv_path = os.path.join(os.path.dirname(__file__), "contentbackup.csv")
+    if not os.path.exists(csv_path):
+        print("WARNING: contentbackup.csv not found. Name lookup won't work.")
+        return
+
+    with open(csv_path, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        # Clean the fieldnames to remove leading/trailing spaces
+        cleaned_fields = [fn.strip() for fn in reader.fieldnames]
+        reader.fieldnames = cleaned_fields
+
+        for row in reader:
+            b_id = row["BookID"].strip()
+            c_id = row["ChapterID"].strip()
+            s_id = row["SectionID"].strip()
+
+            b_name = row["BookName"].strip()
+            c_name = row["ChapterName"].strip()
+            sec_name = row["SectionName"].strip()
+
+            key = (b_id, c_id, s_id)
+            lookup_map[key] = (b_name, c_name, sec_name)
+
+# Load CSV once on startup
+load_contentbackup_csv()
+
 
 @app.route("/")
 def index():
@@ -131,31 +165,47 @@ def train_and_test():
         err = traceback.format_exc()
         return jsonify({"status": "error", "message": str(e), "details": err}), 500
 
-
 @app.route("/predict", methods=["POST"])
 def predict():
-    """
-    Predict for a single .xml file using the trained model in 'model/' folder.
-    """
     if not request.is_json:
         return jsonify({"message": "Expected JSON"}), 415
 
-    info = request.json
-    file_rel = info.get("file", "")
-    norm_path = file_rel.replace("\\", "/")
-    full_path = os.path.join(DATA_DIR, norm_path)
+    body = request.json
+    rel_file = body.get("file", "")
+    if not rel_file:
+        return jsonify({"message": "No file provided"}), 400
 
+    full_path = os.path.join(DATA_DIR, rel_file.replace("\\", "/"))
     try:
+        # 1) Use the model to predict book_id, chapter_id, section_id
         preds = predict_labels(full_path, MODEL_DIR)
+        b_id = preds["book_id"]
+        c_id = preds["chapter_id"]
+        s_id = preds["section_id"]
+
+        # 2) Lookup names in contentbackup.csv
+        b_name, c_name, sec_name = ("Unknown Book", "Unknown Chapter", "Unknown Section")
+        key = (b_id, c_id, s_id)
+        if key in lookup_map:
+            b_name, c_name, sec_name = lookup_map[key]
+
+        # 3) Return IDs and names
         return jsonify({
-            "file": file_rel,
-            "book_id": preds["book_id"],
-            "chapter_id": preds["chapter_id"],
-            "section_id": preds["section_id"]
+            "file": rel_file,
+            "book_id": b_id,
+            "book_name": b_name,
+            "chapter_id": c_id,
+            "chapter_name": c_name,
+            "section_id": s_id,
+            "section_name": sec_name
         })
     except Exception as e:
         err = traceback.format_exc()
-        return jsonify({"file": file_rel, "error": str(e), "details": err}), 500
+        return jsonify({
+            "file": rel_file,
+            "error": str(e),
+            "details": err
+        }), 500
 
 
 @app.route("/upload_file", methods=["POST"])

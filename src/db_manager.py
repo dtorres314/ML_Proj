@@ -3,13 +3,8 @@ import sqlite3
 DB_NAME = "mydatabase.db"
 
 def init_db():
-    """
-    Ensures the DB and main tables exist.
-    """
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-
-    # Main data table
     c.execute("""
         CREATE TABLE IF NOT EXISTS train_test_data_table (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -20,8 +15,6 @@ def init_db():
             problemContent TEXT
         )
     """)
-
-    # Summary table for test predictions
     c.execute("""
         CREATE TABLE IF NOT EXISTS test_summary_table (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,14 +29,10 @@ def init_db():
             matchedChapter INTEGER
         )
     """)
-
     conn.commit()
     conn.close()
 
 def insert_problem_entry(problem_id, book_id, chapter_id, section_id, content):
-    """
-    Insert a single row into train_test_data_table.
-    """
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("""
@@ -55,9 +44,6 @@ def insert_problem_entry(problem_id, book_id, chapter_id, section_id, content):
     conn.close()
 
 def clear_test_summary():
-    """
-    Clears the test_summary_table before each new train/test run.
-    """
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("DELETE FROM test_summary_table")
@@ -67,16 +53,12 @@ def clear_test_summary():
 def insert_test_summary(problem_id, actual_b, actual_c, actual_s,
                         pred_b, pred_c, pred_s,
                         matched_section, matched_chapter):
-    """
-    Insert a single row into test_summary_table with the test outcome.
-    """
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("""
         INSERT INTO test_summary_table
         (problemId, actualBook, actualChapter, actualSection,
-         predBook, predChapter, predSection,
-         matchedSection, matchedChapter)
+         predBook, predChapter, predSection, matchedSection, matchedChapter)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (problem_id, actual_b, actual_c, actual_s,
           pred_b, pred_c, pred_s,
@@ -84,14 +66,18 @@ def insert_test_summary(problem_id, actual_b, actual_c, actual_s,
     conn.commit()
     conn.close()
 
-def fetch_training_data():
+def fetch_training_data_for_book(book_id):
     """
-    Loads all rows from train_test_data_table as a list of dicts.
+    Returns rows from train_test_data_table for only the specified book_id.
     """
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
-    c.execute("SELECT * FROM train_test_data_table")
+    c.execute("""
+        SELECT problemId, bookId, chapterId, sectionId, problemContent
+        FROM train_test_data_table
+        WHERE bookId=?
+    """, (book_id,))
     rows = c.fetchall()
     conn.close()
 
