@@ -1,51 +1,52 @@
-import random
+import random, os
 import joblib
-import os
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.ensemble import RandomForestClassifier
-from src.db_manager import fetch_training_data, clear_test_summary, insert_test_summary
 from sklearn.model_selection import train_test_split
+from src.db_manager import (
+    fetch_training_data_for_book,
+    clear_test_summary,
+    insert_test_summary
+)
 
 def train_and_test_pipeline(model_dir):
     """
-    1) Load data from train_test_data_table
-    2) 70/30 split
-    3) Train model, predict test set
-    4) Log row by row in test_summary_table
-    5) Return summary info (section-level accuracy, chapter-level accuracy)
-    6) Save model/vectorizer in model_dir
+    1) Only fetch data from Book 1
+    2) Shuffle, 70/30 split
+    3) Train model, test -> log results
+    4) Save model & vectorizer to model_dir
+    5) Return summary stats
     """
-    data_rows = fetch_training_data()
+    # *** Only load Book 1's data ***
+    data_rows = fetch_training_data_for_book("1")
     if not data_rows:
-        return {"error": "No data in train_test_data_table."}
+        return {"error": "No data found for Book 1 in DB."}
 
-    # Shuffle for randomness
     random.shuffle(data_rows)
 
-    # Convert to X/y
     X = [d["content"] for d in data_rows]
     y = [f"{d['bookId']}-{d['chapterId']}-{d['sectionId']}" for d in data_rows]
-    problem_ids = [d["problemId"] for d in data_rows]
-    actual_b = [d["bookId"] for d in data_rows]
-    actual_c = [d["chapterId"] for d in data_rows]
-    actual_s = [d["sectionId"] for d in data_rows]
+    prob_ids = [d["problemId"] for d in data_rows]
+    act_books = [d["bookId"] for d in data_rows]
+    act_chaps = [d["chapterId"] for d in data_rows]
+    act_secs = [d["sectionId"] for d in data_rows]
 
-    vectorizer = TfidfVectorizer(max_features=5000)
-    X_vec = vectorizer.fit_transform(X).toarray()
+    vec = TfidfVectorizer(max_features=5000)
+    X_mat = vec.fit_transform(X).toarray()
 
-    # 70/30 split
-    train_size = int(len(X_vec) * 0.7)
-    X_train = X_vec[:train_size]
-    y_train = y[:train_size]
-    X_test = X_vec[train_size:]
-    y_test = y[train_size:]
+    train_size = int(len(X_mat)*0.7)
+    X_train, y_train = X_mat[:train_size], y[:train_size]
+    X_test, y_test = X_mat[train_size:], y[train_size:]
 
-    prob_test = problem_ids[train_size:]
-    book_test = actual_b[train_size:]
-    chap_test = actual_c[train_size:]
-    sect_test = actual_s[train_size:]
+    test_prob_ids = prob_ids[train_size:]
+    test_books = act_books[train_size:]
+    test_chaps = act_chaps[train_size:]
+    test_secs = act_secs[train_size:]
 
-    clf = RandomForestClassifier(n_estimators=10, random_state=42)
+    if not X_test:
+        return {"error": "Not enough data to create a test split. Need >1 problem for train & test."}
+
+    clf = RandomForestClassifier(n_estimators=100, random_state=42)
     clf.fit(X_train, y_train)
 
     # Clear old summary
@@ -55,21 +56,21 @@ def train_and_test_pipeline(model_dir):
     correct_section = 0
     correct_chapter = 0
 
-    for i, vec in enumerate(X_test):
-        pred_label = clf.predict([vec])[0]  # e.g. '1-24-185'
-        pred_parts = pred_label.split("-")
-        if len(pred_parts) == 3:
-            pb, pc, ps = pred_parts
+    for i, xv in enumerate(X_test):
+        pred_label = clf.predict([xv])[0]  # e.g. '1-2-185'
+        p_parts = pred_label.split("-")
+        if len(p_parts) == 3:
+            pb, pc, ps = p_parts
         else:
             pb, pc, ps = ("Unknown", "Unknown", "Unknown")
 
-        ab = book_test[i]
-        ac = chap_test[i]
-        as_ = sect_test[i]
-        pid = prob_test[i]
+        ab = test_books[i]
+        ac = test_chaps[i]
+        as_ = test_secs[i]
+        pid = test_prob_ids[i]
 
-        match_section = 1 if (ab == pb and ac == pc and as_ == ps) else 0
-        match_chapter = 1 if (ab == pb and ac == pc) else 0
+        match_section = 1 if (pb==ab and pc==ac and ps==as_) else 0
+        match_chapter = 1 if (pb==ab and pc==ac) else 0
 
         if match_section:
             correct_section += 1
@@ -78,19 +79,22 @@ def train_and_test_pipeline(model_dir):
 
         insert_test_summary(
             problem_id=pid,
-            actual_b=ab, actual_c=ac, actual_s=as_,
-            pred_b=pb, pred_c=pc, pred_s=ps,
+            actual_b=ab,
+            actual_c=ac,
+            actual_s=as_,
+            pred_b=pb,
+            pred_c=pc,
+            pred_s=ps,
             matched_section=match_section,
             matched_chapter=match_chapter
         )
 
-    section_acc = round(correct_section / total, 3) if total else 0
-    chapter_acc = round(correct_chapter / total, 3) if total else 0
-
+    section_acc = round(correct_section / total, 3)
+    chapter_acc = round(correct_chapter / total, 3)
     summary = {
         "test_size": total,
-        "correct_section": correct_section,
-        "correct_chapter": correct_chapter,
+        "section_correct": correct_section,
+        "chapter_correct": correct_chapter,
         "section_accuracy": section_acc,
         "chapter_accuracy": chapter_acc
     }
@@ -98,6 +102,6 @@ def train_and_test_pipeline(model_dir):
     # Save model & vectorizer
     os.makedirs(model_dir, exist_ok=True)
     joblib.dump(clf, os.path.join(model_dir, "model.pkl"))
-    joblib.dump(vectorizer, os.path.join(model_dir, "vectorizer.pkl"))
+    joblib.dump(vec, os.path.join(model_dir, "vectorizer.pkl"))
 
     return summary
